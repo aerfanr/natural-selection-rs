@@ -3,9 +3,12 @@ use bevy::prelude::*;
 use bevy::sprite::collide_aabb::collide;
 use rand::Rng;
 
-const MOVEMENT_SPEED: f32 = 500.;
-const PERSON_COUNT: i32 = 1000;
-const FOOD_COUNT: i32 = 100;
+const SIMULATION_SPEED: f32 = 1.;
+const MOVEMENT_SPEED: f32 = SIMULATION_SPEED * 150.;
+const DAY_LENGTH: f32 = 10. / SIMULATION_SPEED;
+const NIGHT_LENGTH: f32 = 2. / SIMULATION_SPEED;
+const PERSON_COUNT: i32 = 100;
+const FOOD_COUNT: i32 = 20;
 
 struct Sunset(bool);
 struct DayTimer(Timer);
@@ -322,10 +325,10 @@ fn main() {
         .insert_resource(ClearColor(Color::rgb(0.9, 0.8, 0.8)))
         .insert_resource(Sunset(false))
         .insert_resource(DayTimer {
-            0: Timer::from_seconds(2., true),
+            0: Timer::from_seconds(DAY_LENGTH, true),
         })
         .insert_resource(NightTimer {
-            0: Timer::from_seconds(3., true),
+            0: Timer::from_seconds(NIGHT_LENGTH + DAY_LENGTH, true),
         })
         .add_plugins(DefaultPlugins)
         .add_startup_system(setup)
