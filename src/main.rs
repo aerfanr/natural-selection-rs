@@ -7,8 +7,10 @@ const SIMULATION_SPEED: f32 = 1.;
 const MOVEMENT_SPEED: f32 = SIMULATION_SPEED * 150.;
 const DAY_LENGTH: f32 = 10. / SIMULATION_SPEED;
 const NIGHT_LENGTH: f32 = 2. / SIMULATION_SPEED;
-const PERSON_COUNT: i32 = 100;
-const FOOD_COUNT: i32 = 20;
+const BASE_ENERGY_COST: f32 = 1. / (NIGHT_LENGTH + DAY_LENGTH) / MOVEMENT_SPEED * SIMULATION_SPEED;
+const BASE_ENERGY: f32 = 1.;
+const PERSON_COUNT: i32 = 10;
+const FOOD_COUNT: i32 = 100;
 
 struct Sunset(bool);
 struct DayTimer(Timer);
@@ -28,6 +30,14 @@ struct Fertile;
 struct Returning;
 #[derive(Component)]
 struct AtHome;
+#[derive(Component)]
+struct Dead;
+#[derive(Component)]
+struct Energy(f32);
+#[derive(Component)]
+struct Traits {
+    speed: f32,
+}
 
 #[derive(Component)]
 struct Food;
@@ -61,7 +71,9 @@ fn setup(
                 ..default()
             })
             .insert(Person)
-            .insert(Hungry);
+            .insert(Hungry)
+            .insert(Energy(BASE_ENERGY))
+            .insert(Traits { speed: 1. });
     }
     ev_randomize.send(RandomizeDirections);
 
@@ -90,39 +102,45 @@ fn spawn_food(
 
 fn random_movement(
     time: Res<Time>,
-    mut sprite_position: Query<&mut Transform, (With<Person>, Without<Returning>)>,
+    mut sprite: Query<
+        (&mut Transform, &Traits, &mut Energy),
+        (With<Person>, Without<Returning>, Without<Dead>),
+    >,
     windows: Res<Windows>,
 ) {
     let mut rng = rand::thread_rng();
 
-    for mut transform in sprite_position.iter_mut() {
+    for mut sprite in sprite.iter_mut() {
         let rotation_delta =
             Quat::from_rotation_z((rng.gen::<f32>() - 0.5) * 12. * time.delta_seconds());
-        transform.rotation *= rotation_delta;
+        sprite.0.rotation *= rotation_delta;
 
-        let rotation_rad = transform.rotation.to_euler(EulerRot::ZYX).0;
-        let distance = MOVEMENT_SPEED * time.delta_seconds();
+        let rotation_rad = sprite.0.rotation.to_euler(EulerRot::ZYX).0;
+        let distance = MOVEMENT_SPEED * sprite.1.speed * time.delta_seconds();
         let delta_x = distance * rotation_rad.cos();
         let delta_y = distance * rotation_rad.sin();
+        let e = distance * sprite.1.speed * BASE_ENERGY_COST;
 
-        transform.translation.x += delta_x;
-        transform.translation.y += delta_y;
+        sprite.2 .0 -= e;
+
+        sprite.0.translation.x += delta_x;
+        sprite.0.translation.y += delta_y;
 
         let window = windows.primary();
         let width = window.width() / 2.;
         let height = window.height() / 2.;
 
-        if transform.translation.x > width {
-            transform.translation.x = -width;
+        if sprite.0.translation.x > width {
+            sprite.0.translation.x = -width;
         }
-        if transform.translation.x < -width {
-            transform.translation.x = width;
+        if sprite.0.translation.x < -width {
+            sprite.0.translation.x = width;
         }
-        if transform.translation.y > height {
-            transform.translation.y = -height;
+        if sprite.0.translation.y > height {
+            sprite.0.translation.y = -height;
         }
-        if transform.translation.y < -height {
-            transform.translation.y = height;
+        if sprite.0.translation.y < -height {
+            sprite.0.translation.y = height;
         }
     }
 }
@@ -130,14 +148,20 @@ fn random_movement(
 fn home_movement(
     time: Res<Time>,
     mut commands: Commands,
-    mut sprites: Query<(&mut Transform, Entity), (With<Person>, With<Returning>)>,
+    mut sprites: Query<
+        (&mut Transform, Entity, &Traits, &mut Energy),
+        (With<Person>, With<Returning>, Without<Dead>),
+    >,
     windows: Res<Windows>,
 ) {
     let window = windows.primary();
     let width = window.width() / 2.;
     let height = window.height() / 2.;
 
-    for sprite in sprites.iter_mut() {
+    for mut sprite in sprites.iter_mut() {
+        let d = MOVEMENT_SPEED * time.delta_seconds() * sprite.2.speed;
+        let e = d * sprite.2.speed * BASE_ENERGY_COST;
+
         let mut transform = sprite.0;
         let left = transform.translation.x + width;
         let right = width - transform.translation.x;
@@ -151,17 +175,21 @@ fn home_movement(
         if min <= 0. {
             commands.entity(sprite.1).insert(AtHome);
         } else if min == left {
-            transform.translation.x -= MOVEMENT_SPEED * time.delta_seconds();
+            transform.translation.x -= d;
             transform.rotation = Quat::from_rotation_z(f32::to_radians(180.));
+            sprite.3 .0 -= e;
         } else if min == right {
-            transform.translation.x += MOVEMENT_SPEED * time.delta_seconds();
+            transform.translation.x += d;
             transform.rotation = Quat::from_rotation_z(f32::to_radians(0.));
+            sprite.3 .0 -= e;
         } else if min == bottom {
-            transform.translation.y -= MOVEMENT_SPEED * time.delta_seconds();
+            transform.translation.y -= d;
             transform.rotation = Quat::from_rotation_z(f32::to_radians(270.));
+            sprite.3 .0 -= e;
         } else if min == top {
-            transform.translation.y += MOVEMENT_SPEED * time.delta_seconds();
+            transform.translation.y += d;
             transform.rotation = Quat::from_rotation_z(f32::to_radians(90.));
+            sprite.3 .0 -= e;
         }
     }
 }
@@ -233,7 +261,7 @@ fn night_timer(
     mut timer: ResMut<NightTimer>,
     mut sunset: ResMut<Sunset>,
     to_die: Query<Entity, (With<Person>, Without<AtHome>)>,
-    to_live: Query<Entity, (With<Person>, With<AtHome>)>,
+    mut to_live: Query<(Entity, &mut Energy), (With<Person>, With<AtHome>)>,
     to_reproduce: Query<&Transform, (With<Person>, With<AtHome>, With<Fertile>)>,
     mut ev_randomize: EventWriter<RandomizeDirections>,
     mut ev_spawn_food: EventWriter<SpawnFood>,
@@ -246,10 +274,11 @@ fn night_timer(
         for person in to_die.iter() {
             commands.entity(person).despawn();
         }
-        for person in to_live.iter() {
-            commands.entity(person).insert(Hungry);
+        for mut person in to_live.iter_mut() {
+            person.1 .0 = BASE_ENERGY;
+            commands.entity(person.0).insert(Hungry);
             commands
-                .entity(person)
+                .entity(person.0)
                 .remove_bundle::<(Fertile, Returning, AtHome)>();
         }
         for person in to_reproduce.iter() {
@@ -260,19 +289,30 @@ fn night_timer(
     }
 }
 
-fn reproduce(mut commands: Commands, mut events: EventReader<Reproduce>, asset_server: Res<AssetServer>) {
+fn reproduce(
+    mut commands: Commands,
+    mut events: EventReader<Reproduce>,
+    asset_server: Res<AssetServer>,
+) {
     for event in events.iter() {
-        commands.spawn_bundle(SpriteBundle {
-                    texture: asset_server.load("person1.png"),
-                    transform: event.0,
-                    ..default()
-                })
-                .insert(Person)
-                .insert(Hungry);
+        commands
+            .spawn_bundle(SpriteBundle {
+                texture: asset_server.load("person1.png"),
+                transform: event.0,
+                ..default()
+            })
+            .insert(Person)
+            .insert(Hungry)
+            .insert(Energy(BASE_ENERGY))
+            .insert(Traits { speed: 1. });
     }
 }
 
-fn count_stuff(mut events: EventReader<RandomizeDirections>, persons: Query<&Person>, foods: Query<&Food>) {
+fn count_stuff(
+    mut events: EventReader<RandomizeDirections>,
+    persons: Query<&Person>,
+    foods: Query<&Food>,
+) {
     for _event in events.iter() {
         println!("{}\t{}", persons.iter().count(), foods.iter().count());
     }
@@ -298,6 +338,14 @@ fn randomize_directions(
     }
 }
 
+fn energy(mut commands: Commands, people: Query<(Entity, &Energy), Without<Dead>>) {
+    for person in people.iter() {
+        if person.1 .0 <= 0. {
+            commands.entity(person.0).insert(Dead);
+        }
+    }
+}
+
 fn run_if_sunset(sunset: Res<Sunset>) -> ShouldRun {
     if sunset.0 {
         ShouldRun::Yes
@@ -314,9 +362,9 @@ fn run_if_day(sunset: Res<Sunset>) -> ShouldRun {
     }
 }
 
-//fn debug1(query: Query<&Hungry, Changed<Hungry>>) {
+//fn debug1(query: Query<Entity, Without<Dead>>) {
 //    for item in query.iter() {
-//        println!("CHANGE");
+//        println!("Dead");
 //    }
 //}
 
@@ -351,6 +399,7 @@ fn main() {
         .add_system(spawn_food)
         .add_system(reproduce)
         .add_system(count_stuff)
+        .add_system(energy)
         .add_system_to_stage(CoreStage::PreUpdate, night_timer)
         .add_event::<RandomizeDirections>()
         .add_event::<SpawnFood>()
