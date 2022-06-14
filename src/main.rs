@@ -9,6 +9,7 @@ const DAY_LENGTH: f32 = 10. / SIMULATION_SPEED;
 const NIGHT_LENGTH: f32 = 2. / SIMULATION_SPEED;
 const BASE_ENERGY_COST: f32 = 1. / (NIGHT_LENGTH + DAY_LENGTH) / MOVEMENT_SPEED * SIMULATION_SPEED;
 const BASE_ENERGY: f32 = 1.;
+const TRAIT_CHANGE_INTENSITY: f32 = 0.1;
 const PERSON_COUNT: i32 = 10;
 const FOOD_COUNT: i32 = 100;
 
@@ -18,7 +19,7 @@ struct NightTimer(Timer);
 
 struct RandomizeDirections;
 struct SpawnFood;
-struct Reproduce(Transform);
+struct Reproduce(Transform, Traits);
 
 #[derive(Component)]
 struct Person;
@@ -34,9 +35,17 @@ struct AtHome;
 struct Dead;
 #[derive(Component)]
 struct Energy(f32);
-#[derive(Component)]
+#[derive(Component, Copy, Clone)]
 struct Traits {
     speed: f32,
+}
+
+impl Traits {
+    fn variation(&self) -> Traits {
+        Traits {
+            speed: self.speed + (rand::random::<f32>() * 2. - 1.) * TRAIT_CHANGE_INTENSITY,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -262,7 +271,7 @@ fn night_timer(
     mut sunset: ResMut<Sunset>,
     to_die: Query<Entity, (With<Person>, Without<AtHome>)>,
     mut to_live: Query<(Entity, &mut Energy), (With<Person>, With<AtHome>)>,
-    to_reproduce: Query<&Transform, (With<Person>, With<AtHome>, With<Fertile>)>,
+    to_reproduce: Query<(&Transform, &Traits), (With<Person>, With<AtHome>, With<Fertile>)>,
     mut ev_randomize: EventWriter<RandomizeDirections>,
     mut ev_spawn_food: EventWriter<SpawnFood>,
     mut ev_reproduce: EventWriter<Reproduce>,
@@ -282,7 +291,7 @@ fn night_timer(
                 .remove_bundle::<(Fertile, Returning, AtHome)>();
         }
         for person in to_reproduce.iter() {
-            ev_reproduce.send(Reproduce(*person));
+            ev_reproduce.send(Reproduce(*person.0, person.1.variation()));
         }
         ev_randomize.send(RandomizeDirections);
         ev_spawn_food.send(SpawnFood);
@@ -304,17 +313,30 @@ fn reproduce(
             .insert(Person)
             .insert(Hungry)
             .insert(Energy(BASE_ENERGY))
-            .insert(Traits { speed: 1. });
+            .insert(event.1);
     }
 }
 
 fn count_stuff(
     mut events: EventReader<RandomizeDirections>,
-    persons: Query<&Person>,
+    persons: Query<&Traits>,
     foods: Query<&Food>,
+    mut exit: EventWriter<bevy::app::AppExit>
 ) {
     for _event in events.iter() {
-        println!("{}\t{}", persons.iter().count(), foods.iter().count());
+        let mut speed_avg = 0.;
+        let mut people_count = 0.;
+        for person in persons.iter() {
+            speed_avg += person.speed;
+            people_count += 1.;
+        }
+        let food_count = foods.iter().count();
+        if people_count <= 0. {
+            exit.send(bevy::app::AppExit);
+            break;
+        }
+        speed_avg = speed_avg / people_count;
+        println!("{};\t{};\t{};", people_count, food_count, speed_avg);
     }
 }
 
