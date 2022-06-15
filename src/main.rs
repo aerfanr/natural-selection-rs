@@ -5,11 +5,11 @@ use bevy_egui::{egui, EguiPlugin, EguiContext};
 use egui::plot::{Plot, Bar, BarChart, Line, Value, Values};
 use rand::Rng;
 
-const SIMULATION_SPEED: f32 = 1.;
-const MOVEMENT_SPEED: f32 = SIMULATION_SPEED * 150.;
-const DAY_LENGTH: f32 = 10. / SIMULATION_SPEED;
-const NIGHT_LENGTH: f32 = 2. / SIMULATION_SPEED;
-const BASE_ENERGY_COST: f32 = 1. / (NIGHT_LENGTH + DAY_LENGTH) / MOVEMENT_SPEED * SIMULATION_SPEED;
+const SIMULATION_SPEED: f32 = 6.;
+const MOVEMENT_SPEED: f32 = 150.;
+const DAY_LENGTH: f32 = 10.;
+const NIGHT_LENGTH: f32 = 2.;
+const BASE_ENERGY_COST: f32 = 1. / (NIGHT_LENGTH + DAY_LENGTH) / MOVEMENT_SPEED;
 const BASE_ENERGY: f32 = 1.;
 const TRAIT_CHANGE_INTENSITY: f32 = 0.1;
 const PERSON_COUNT: i32 = 10;
@@ -142,11 +142,11 @@ fn random_movement(
 
     for mut sprite in sprite.iter_mut() {
         let rotation_delta =
-            Quat::from_rotation_z((rng.gen::<f32>() - 0.5) * 12. * time.delta_seconds());
+            Quat::from_rotation_z((rng.gen::<f32>() - 0.5) * 12. * time.delta_seconds() * SIMULATION_SPEED);
         sprite.0.rotation *= rotation_delta;
 
         let rotation_rad = sprite.0.rotation.to_euler(EulerRot::ZYX).0;
-        let distance = MOVEMENT_SPEED * sprite.1.speed * time.delta_seconds();
+        let distance = MOVEMENT_SPEED * sprite.1.speed * time.delta_seconds() * SIMULATION_SPEED;
         let delta_x = distance * rotation_rad.cos();
         let delta_y = distance * rotation_rad.sin();
         let e = distance * sprite.1.speed * BASE_ENERGY_COST;
@@ -189,7 +189,7 @@ fn home_movement(
     let height = window.height() / 2.;
 
     for mut sprite in sprites.iter_mut() {
-        let d = MOVEMENT_SPEED * time.delta_seconds() * sprite.2.speed;
+        let d = MOVEMENT_SPEED * time.delta_seconds() * SIMULATION_SPEED * sprite.2.speed;
         let e = d * sprite.2.speed * BASE_ENERGY_COST;
 
         let mut transform = sprite.0;
@@ -363,13 +363,13 @@ fn count_stuff(
         println!("{};\t{};\t{};", people_count, food_count, speed_avg);
 
         charts.population.push(Bar {
-            argument: time.seconds_since_startup(),
+            argument: time.seconds_since_startup() * SIMULATION_SPEED as f64,
             value: people_count as f64,
             name: String::from("Population"),
             ..bar_options()
         });
         charts.food_count.push(Bar {
-            argument: time.seconds_since_startup(),
+            argument: time.seconds_since_startup() * SIMULATION_SPEED as f64,
             value: food_count as f64,
             name: String::from("Food Count"),
             fill: egui::Color32::RED,
@@ -377,7 +377,7 @@ fn count_stuff(
             ..bar_options()
         });
         charts.avg_speed.push(Value {
-            x: time.seconds_since_startup(),
+            x: time.seconds_since_startup() * SIMULATION_SPEED as f64,
             y: speed_avg as f64
         });
     }
@@ -459,10 +459,10 @@ fn main() {
         .insert_resource(Sunset(false))
         .insert_resource(Charts::default())
         .insert_resource(DayTimer {
-            0: Timer::from_seconds(DAY_LENGTH, true),
+            0: Timer::from_seconds(DAY_LENGTH / SIMULATION_SPEED, true),
         })
         .insert_resource(NightTimer {
-            0: Timer::from_seconds(NIGHT_LENGTH + DAY_LENGTH, true),
+            0: Timer::from_seconds((NIGHT_LENGTH + DAY_LENGTH) / SIMULATION_SPEED, true),
         })
         .add_plugins(DefaultPlugins)
         .add_plugin(EguiPlugin)
