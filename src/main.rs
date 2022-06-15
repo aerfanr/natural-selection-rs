@@ -2,7 +2,7 @@ use bevy::ecs::schedule::ShouldRun;
 use bevy::prelude::*;
 use bevy::sprite::collide_aabb::collide;
 use bevy_egui::{egui, EguiPlugin, EguiContext};
-use egui::plot::{Plot, Bar, BarChart, Legend, Line, Value, Values};
+use egui::plot::{Plot, Bar, BarChart, Line, Value, Values};
 use rand::Rng;
 
 const SIMULATION_SPEED: f32 = 1.;
@@ -373,7 +373,7 @@ fn count_stuff(
             value: food_count as f64,
             name: String::from("Food Count"),
             fill: egui::Color32::RED,
-            bar_width: 3.,
+            bar_width: 1.,
             ..bar_options()
         });
         charts.avg_speed.push(Value {
