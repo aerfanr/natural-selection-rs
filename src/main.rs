@@ -1,6 +1,8 @@
 use bevy::ecs::schedule::ShouldRun;
 use bevy::prelude::*;
 use bevy::sprite::collide_aabb::collide;
+use bevy_egui::{egui, EguiPlugin, EguiContext};
+use egui::plot::{Plot, Bar, BarChart, Legend, Line, Value, Values};
 use rand::Rng;
 
 const SIMULATION_SPEED: f32 = 1.;
@@ -16,6 +18,12 @@ const FOOD_COUNT: i32 = 100;
 struct Sunset(bool);
 struct DayTimer(Timer);
 struct NightTimer(Timer);
+#[derive(Default)]
+struct Charts {
+    population: Vec<Bar>,
+    food_count: Vec<Bar>,
+    avg_speed: Vec<Value>
+}
 
 struct RandomizeDirections;
 struct SpawnFood;
@@ -52,6 +60,19 @@ impl Traits {
 struct Food;
 #[derive(Component, Debug)]
 struct Eaten(bool);
+
+fn bar_options() -> Bar {
+    Bar {
+        argument: 0.,
+        value: 0.,
+        name: String::from(""),
+        bar_width: 5.,
+        base_offset: None,
+        fill: egui::Color32::LIGHT_GRAY,
+        orientation: egui::widgets::plot::Orientation::Vertical,
+        stroke: egui::Stroke::none()
+    }
+}
 
 fn get_random_location(window: &Window) -> Transform {
     let width = window.width();
@@ -321,6 +342,8 @@ fn count_stuff(
     mut events: EventReader<RandomizeDirections>,
     persons: Query<&Traits>,
     foods: Query<&Food>,
+    time: Res<Time>,
+    mut charts: ResMut<Charts>,
     mut exit: EventWriter<bevy::app::AppExit>
 ) {
     for _event in events.iter() {
@@ -336,8 +359,48 @@ fn count_stuff(
             break;
         }
         speed_avg = speed_avg / people_count;
+
         println!("{};\t{};\t{};", people_count, food_count, speed_avg);
+
+        charts.population.push(Bar {
+            argument: time.seconds_since_startup(),
+            value: people_count as f64,
+            name: String::from("Population"),
+            ..bar_options()
+        });
+        charts.food_count.push(Bar {
+            argument: time.seconds_since_startup(),
+            value: food_count as f64,
+            name: String::from("Food Count"),
+            fill: egui::Color32::RED,
+            bar_width: 3.,
+            ..bar_options()
+        });
+        charts.avg_speed.push(Value {
+            x: time.seconds_since_startup(),
+            y: speed_avg as f64
+        });
     }
+}
+
+fn plot_stuff(
+    mut context: ResMut<EguiContext>,
+    charts: Res<Charts>
+) {
+    egui::Window::new("Stats").show(context.ctx_mut(), |ui| {
+        let population_chart = BarChart::new(charts.population.clone());
+        let food_chart = BarChart::new(charts.food_count.clone());
+        let avg_speed_line = Line::new(Values::from_values(charts.avg_speed.clone()));
+        Plot::new("Stats_1").height(200.)
+            .show(ui, |plot_ui| {
+                plot_ui.bar_chart(population_chart);
+                plot_ui.bar_chart(food_chart);
+            });
+        Plot::new("Stats_2").height(200.)
+            .show(ui, |plot_ui| {
+                plot_ui.line(avg_speed_line)
+            });
+    });
 }
 
 fn background_color(sunset: Res<Sunset>, mut clear_color: ResMut<ClearColor>) {
@@ -394,6 +457,7 @@ fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.9, 0.8, 0.8)))
         .insert_resource(Sunset(false))
+        .insert_resource(Charts::default())
         .insert_resource(DayTimer {
             0: Timer::from_seconds(DAY_LENGTH, true),
         })
@@ -401,6 +465,7 @@ fn main() {
             0: Timer::from_seconds(NIGHT_LENGTH + DAY_LENGTH, true),
         })
         .add_plugins(DefaultPlugins)
+        .add_plugin(EguiPlugin)
         .add_startup_system(setup)
         .add_system(background_color)
         .add_system(home_movement)
@@ -422,6 +487,7 @@ fn main() {
         .add_system(reproduce)
         .add_system(count_stuff)
         .add_system(energy)
+        .add_system(plot_stuff)
         .add_system_to_stage(CoreStage::PreUpdate, night_timer)
         .add_event::<RandomizeDirections>()
         .add_event::<SpawnFood>()
