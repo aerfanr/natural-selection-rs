@@ -25,6 +25,8 @@ struct Charts {
     avg_speed: Vec<Value>
 }
 
+struct Started(bool);
+
 struct RandomizeDirections;
 struct SpawnFood;
 struct Reproduce(Transform, Traits);
@@ -86,13 +88,21 @@ fn get_random_location(window: &Window) -> Transform {
 
 fn setup(
     mut commands: Commands,
+) {
+    commands.spawn_bundle(OrthographicCameraBundle::new_2d());
+}
+
+fn start_simulation(
+    mut commands: Commands,
     asset_server: Res<AssetServer>,
     windows: Res<Windows>,
     mut ev_spawn_food: EventWriter<SpawnFood>,
     mut ev_randomize: EventWriter<RandomizeDirections>,
+    started: Res<Started>,
+    mut day_timer: ResMut<DayTimer>,
+    mut night_timer: ResMut<NightTimer>,
 ) {
-    commands.spawn_bundle(OrthographicCameraBundle::new_2d());
-
+    if !started.is_changed() || !started.0 { return };
     for _i in 0..PERSON_COUNT {
         commands
             .spawn_bundle(SpriteBundle {
@@ -108,6 +118,9 @@ fn setup(
     ev_randomize.send(RandomizeDirections);
 
     ev_spawn_food.send(SpawnFood);
+
+    day_timer.0.reset();
+    night_timer.0.reset();
 }
 
 fn spawn_food(
@@ -403,6 +416,17 @@ fn plot_stuff(
     });
 }
 
+fn options(
+    mut context: ResMut<EguiContext>,
+    mut started: ResMut<Started>
+) {
+    egui::Window::new("Options").show(context.ctx_mut(), |ui| {
+        if ui.button("Start Simulation").clicked() {
+            started.0 = true;
+        }
+    });
+}
+
 fn background_color(sunset: Res<Sunset>, mut clear_color: ResMut<ClearColor>) {
     if sunset.0 {
         clear_color.0 = Color::rgb(0.5, 0.4, 0.4);
@@ -447,6 +471,11 @@ fn run_if_day(sunset: Res<Sunset>) -> ShouldRun {
     }
 }
 
+fn run_if_started(started: Res<Started>) -> ShouldRun {
+    if started.0 && !started.is_changed() { ShouldRun::Yes }
+    else { ShouldRun::No }
+}
+
 //fn debug1(query: Query<Entity, Without<Dead>>) {
 //    for item in query.iter() {
 //        println!("Dead");
@@ -458,6 +487,7 @@ fn main() {
         .insert_resource(ClearColor(Color::rgb(0.9, 0.8, 0.8)))
         .insert_resource(Sunset(false))
         .insert_resource(Charts::default())
+        .insert_resource(Started(false))
         .insert_resource(DayTimer {
             0: Timer::from_seconds(DAY_LENGTH / SIMULATION_SPEED, true),
         })
@@ -467,6 +497,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugin(EguiPlugin)
         .add_startup_system(setup)
+        .add_system(start_simulation)
         .add_system(background_color)
         .add_system(home_movement)
         .add_system_set(
@@ -480,15 +511,25 @@ fn main() {
                 .with_system(random_movement)
                 .with_system(collision),
         )
+        .add_system_set_to_stage(CoreStage::PreUpdate,
+            SystemSet::new()
+                .with_run_criteria(run_if_started)
+                .with_system(night_timer)
+
+        )
+        .add_system_set(
+            SystemSet::new()
+                .with_run_criteria(run_if_started)
+                .with_system(day_timer)
+                .with_system(count_stuff)
+        )
         .add_system(fertile_return)
-        .add_system(day_timer)
         .add_system(randomize_directions)
         .add_system(spawn_food)
         .add_system(reproduce)
-        .add_system(count_stuff)
         .add_system(energy)
         .add_system(plot_stuff)
-        .add_system_to_stage(CoreStage::PreUpdate, night_timer)
+        .add_system(options)
         .add_event::<RandomizeDirections>()
         .add_event::<SpawnFood>()
         .add_event::<Reproduce>()
