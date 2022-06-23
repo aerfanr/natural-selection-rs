@@ -1,6 +1,5 @@
 use bevy::ecs::schedule::ShouldRun;
 use bevy::prelude::*;
-use bevy::sprite::collide_aabb::collide;
 use bevy_egui::{egui, EguiContext, EguiPlugin};
 use egui::plot::{Bar, BarChart, Line, Plot, Value, Values};
 use egui::widgets::DragValue;
@@ -287,6 +286,10 @@ fn non_hungry_return(
     }
 }
 
+fn get_distance(x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt()
+}
+
 fn collision(
     mut commands: Commands,
     persons: Query<(Entity, &Transform), (With<Person>, Without<Fertile>)>,
@@ -294,17 +297,9 @@ fn collision(
     mut eaten: Query<&mut Eaten>,
     hungry: Query<&Hungry>,
 ) {
-    let person_size = Vec2::new(64., 64.);
-    let food_size = Vec2::new(0., 0.);
     for person in persons.iter() {
         for food in foods.iter() {
-            if collide(
-                person.1.translation,
-                person_size,
-                food.1.translation,
-                food_size,
-            )
-            .is_some()
+            if get_distance(person.1.translation.x, person.1.translation.y, food.1.translation.x, food.1.translation.y) <= 45.
             {
                 if let Ok(mut is_eaten) = eaten.get_mut(food.0) {
                     if !is_eaten.0 {
