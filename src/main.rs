@@ -17,6 +17,7 @@ struct Charts {
     population: Vec<Bar>,
     food_count: Vec<Bar>,
     avg_speed: Vec<Value>,
+    avg_sense: Vec<Value>,
 }
 struct Started(bool);
 struct Options {
@@ -25,6 +26,7 @@ struct Options {
     day_length: f32,
     night_length: f32,
     base_energy_cost: f32,
+    sense_cost: f32,
     base_energy: f32,
     trait_change_intensity: f32,
     person_count: i32,
@@ -39,6 +41,7 @@ impl Default for Options {
             day_length: DAY_LENGTH,
             night_length: NIGHT_LENGTH,
             base_energy_cost: 1. / (NIGHT_LENGTH + DAY_LENGTH) / MOVEMENT_SPEED,
+            sense_cost: 1. / (NIGHT_LENGTH + DAY_LENGTH),
             base_energy: 1.,
             trait_change_intensity: 0.1,
             person_count: 10,
@@ -65,15 +68,33 @@ struct AtHome;
 struct Dead;
 #[derive(Component)]
 struct Energy(f32);
+#[derive(Component)]
+struct Prey {
+    x: f32,
+    y: f32,
+    distance: f32,
+}
 #[derive(Component, Copy, Clone)]
 struct Traits {
     speed: f32,
+    sense: f32,
+}
+
+impl Default for Traits {
+    fn default() -> Self {
+        Self {
+            speed: 1.,
+            sense: 100.,
+        }
+    }
 }
 
 impl Traits {
     fn variation(&self, change_intensity: f32) -> Traits {
         Traits {
-            speed: self.speed + (rand::random::<f32>() * 2. - 1.) * change_intensity,
+            speed: self.speed * (1. + (rand::random::<f32>() * 2. - 1.) * change_intensity),
+            sense: (self.sense * (1. + (rand::random::<f32>() * 2. - 1.) * change_intensity))
+                .max(1e5),
         }
     }
 }
@@ -134,7 +155,7 @@ fn start_simulation(
             .insert(Person)
             .insert(Hungry)
             .insert(Energy(options.base_energy))
-            .insert(Traits { speed: 1. });
+            .insert(Traits::default());
     }
     ev_randomize.send(RandomizeDirections);
 
@@ -168,23 +189,40 @@ fn spawn_food(
     }
 }
 
-fn random_movement(
+fn normal_rotation(
+    mut sprites: Query<
+        (&mut Transform, Option<&Prey>),
+        (With<Person>, Without<Returning>, Without<Dead>),
+    >,
     time: Res<Time>,
-    mut sprite: Query<
+    options: Res<Options>,
+) {
+    let mut rng = rand::thread_rng();
+    for (mut transform, prey) in sprites.iter_mut() {
+        if prey.is_some() {
+            transform.rotation = Quat::from_rotation_z(
+                (prey.unwrap().y - transform.translation.y)
+                    .atan2(prey.unwrap().x - transform.translation.x),
+            )
+        } else {
+            let rotation_delta = Quat::from_rotation_z(
+                (rng.gen::<f32>() - 0.5) * 12. * time.delta_seconds() * options.simulation_speed,
+            );
+            transform.rotation *= rotation_delta;
+        }
+    }
+}
+
+fn normal_movement(
+    time: Res<Time>,
+    mut sprites: Query<
         (&mut Transform, &Traits, &mut Energy),
         (With<Person>, Without<Returning>, Without<Dead>),
     >,
     windows: Res<Windows>,
     options: Res<Options>,
 ) {
-    let mut rng = rand::thread_rng();
-
-    for mut sprite in sprite.iter_mut() {
-        let rotation_delta = Quat::from_rotation_z(
-            (rng.gen::<f32>() - 0.5) * 12. * time.delta_seconds() * options.simulation_speed,
-        );
-        sprite.0.rotation *= rotation_delta;
-
+    for mut sprite in sprites.iter_mut() {
         let rotation_rad = sprite.0.rotation.to_euler(EulerRot::ZYX).0;
         let distance = options.movement_speed
             * sprite.1.speed
@@ -192,7 +230,8 @@ fn random_movement(
             * options.simulation_speed;
         let delta_x = distance * rotation_rad.cos();
         let delta_y = distance * rotation_rad.sin();
-        let e = distance * sprite.1.speed * options.base_energy_cost;
+        let e = distance * sprite.1.speed * options.base_energy_cost
+            + options.sense_cost * time.delta_seconds() * options.simulation_speed;
 
         sprite.2 .0 -= e;
 
@@ -290,17 +329,22 @@ fn get_distance(x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt()
 }
 
-fn collision(
+fn radar(
     mut commands: Commands,
-    persons: Query<(Entity, &Transform), (With<Person>, Without<Fertile>)>,
+    persons: Query<(Entity, &Transform, Option<&Prey>, &Traits), (With<Person>, Without<Fertile>)>,
     foods: Query<(Entity, &Transform), With<Food>>,
     mut eaten: Query<&mut Eaten>,
     hungry: Query<&Hungry>,
 ) {
     for person in persons.iter() {
         for food in foods.iter() {
-            if get_distance(person.1.translation.x, person.1.translation.y, food.1.translation.x, food.1.translation.y) <= 45.
-            {
+            let distance = get_distance(
+                person.1.translation.x,
+                person.1.translation.y,
+                food.1.translation.x,
+                food.1.translation.y,
+            );
+            if distance <= 45. {
                 if let Ok(mut is_eaten) = eaten.get_mut(food.0) {
                     if !is_eaten.0 {
                         commands.entity(food.0).despawn();
@@ -313,6 +357,18 @@ fn collision(
                         }
                         is_eaten.0 = true;
                     }
+                }
+            } else if distance <= person.3.sense {
+                if !person.2.is_some() || distance >= person.2.unwrap().distance {
+                    commands.entity(person.0).insert(Prey {
+                        x: food.1.translation.x,
+                        y: food.1.translation.y,
+                        distance: distance,
+                    });
+                }
+            } else {
+                if person.2.is_some() {
+                    commands.entity(person.0).remove::<Prey>();
                 }
             }
         }
@@ -397,9 +453,11 @@ fn count_stuff(
 ) {
     for _event in events.iter() {
         let mut speed_avg = 0.;
+        let mut sense_avg = 0.;
         let mut people_count = 0.;
         for person in persons.iter() {
             speed_avg += person.speed;
+            sense_avg += person.sense;
             people_count += 1.;
         }
         let food_count = foods.iter().count();
@@ -408,6 +466,7 @@ fn count_stuff(
             break;
         }
         speed_avg = speed_avg / people_count;
+        sense_avg = sense_avg / people_count;
 
         println!("{};\t{};\t{};", people_count, food_count, speed_avg);
 
@@ -429,6 +488,10 @@ fn count_stuff(
             x: time.seconds_since_startup() * options.simulation_speed as f64,
             y: speed_avg as f64,
         });
+        charts.avg_sense.push(Value {
+            x: time.seconds_since_startup() * options.simulation_speed as f64,
+            y: sense_avg as f64,
+        });
     }
 }
 
@@ -437,6 +500,7 @@ fn plot_stuff(mut context: ResMut<EguiContext>, charts: Res<Charts>) {
         let population_chart = BarChart::new(charts.population.clone());
         let food_chart = BarChart::new(charts.food_count.clone());
         let avg_speed_line = Line::new(Values::from_values(charts.avg_speed.clone()));
+        let avg_sense_line = Line::new(Values::from_values(charts.avg_sense.clone()));
         Plot::new("Stats_1").height(200.).show(ui, |plot_ui| {
             plot_ui.bar_chart(population_chart);
             plot_ui.bar_chart(food_chart);
@@ -444,6 +508,9 @@ fn plot_stuff(mut context: ResMut<EguiContext>, charts: Res<Charts>) {
         Plot::new("Stats_2")
             .height(200.)
             .show(ui, |plot_ui| plot_ui.line(avg_speed_line));
+        Plot::new("Stats_3")
+            .height(200.)
+            .show(ui, |plot_ui| plot_ui.line(avg_sense_line));
     });
 }
 
@@ -582,8 +649,9 @@ fn main() {
         .add_system_set(
             SystemSet::new()
                 .with_run_criteria(run_if_day)
-                .with_system(random_movement)
-                .with_system(collision),
+                .with_system(normal_movement)
+                .with_system(normal_rotation)
+                .with_system(radar),
         )
         .add_system_set_to_stage(
             CoreStage::PreUpdate,
