@@ -94,7 +94,7 @@ impl Traits {
         Traits {
             speed: self.speed * (1. + (rand::random::<f32>() * 2. - 1.) * change_intensity),
             sense: (self.sense * (1. + (rand::random::<f32>() * 2. - 1.) * change_intensity))
-                .max(1e5),
+                .max(1e-5),
         }
     }
 }
